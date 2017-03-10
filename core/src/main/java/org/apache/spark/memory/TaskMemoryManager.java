@@ -19,13 +19,7 @@ package org.apache.spark.memory;
 
 import javax.annotation.concurrent.GuardedBy;
 import java.io.IOException;
-import java.util.Arrays;
-import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
+import java.util.*;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
@@ -113,6 +107,20 @@ public class TaskMemoryManager {
   private final HashSet<MemoryConsumer> consumers;
 
   /**
+   * Tracks spillable on-heap memory consumers which memory used greater than 0, ordered by the
+   * size of used memory in bytes. It will only be initialized when spill occurs
+   */
+  @GuardedBy("this")
+  private TreeMap<Long, List<MemoryConsumer>> onHeapConsumers = null;
+
+  /**
+   * Tracks spillable off-heap memory consumers which memory used greater than 0, ordered by the
+   * size of used memory in bytes. It will only be initialized when spill occurs.
+   */
+  @GuardedBy("this")
+  private TreeMap<Long, List<MemoryConsumer>> offHeapConsumers = null;
+
+  /**
    * The amount of memory that is acquired but not used.
    */
   private volatile long acquiredButNotUsed = 0L;
@@ -137,6 +145,13 @@ public class TaskMemoryManager {
     assert(required >= 0);
     assert(consumer != null);
     MemoryMode mode = consumer.getMode();
+    TreeMap<Long, List<MemoryConsumer>> sortedConsumers;
+    if (mode == MemoryMode.ON_HEAP) {
+      sortedConsumers = onHeapConsumers;
+    } else {
+      sortedConsumers = offHeapConsumers;
+    }
+
     // If we are allocating Tungsten pages off-heap and receive a request to allocate on-heap
     // memory here, then it may not make sense to spill since that would only end up freeing
     // off-heap memory. This is subject to change, though, so it may be risky to make this
@@ -151,18 +166,23 @@ public class TaskMemoryManager {
         // Sort the consumers according their memory usage. So we avoid spilling the same consumer
         // which is just spilled in last few times and re-spilling on it will produce many small
         // spill files.
-        TreeMap<Long, List<MemoryConsumer>> sortedConsumers = new TreeMap<>();
-        for (MemoryConsumer c: consumers) {
-          if (c != consumer && c.getUsed() > 0 && c.getMode() == mode) {
-            long key = c.getUsed();
-            List<MemoryConsumer> list = sortedConsumers.get(key);
-            if (list == null) {
-              list = new ArrayList<>(1);
-              sortedConsumers.put(key, list);
+        if (sortedConsumers == null) {
+          sortedConsumers = new TreeMap<>();
+          for (MemoryConsumer c: consumers) {
+            if (c != consumer && c.getUsed() > 0 && c.getMode() == mode) {
+              long key = c.getUsed();
+              List<MemoryConsumer> list = sortedConsumers.get(key);
+              if (list == null) {
+                list = new ArrayList<>(1);
+                sortedConsumers.put(key, list);
+              }
+              list.add(c);
             }
-            list.add(c);
           }
         }
+        assert (sortedConsumers != null);
+        // record those spilled memory consumers
+        List<MemoryConsumer> spilledConsumers = new ArrayList<>();
         while (!sortedConsumers.isEmpty()) {
           // Get the consumer using the least memory more than the remaining required memory.
           Map.Entry<Long, List<MemoryConsumer>> currentEntry =
@@ -174,6 +194,7 @@ public class TaskMemoryManager {
           }
           List<MemoryConsumer> cList = currentEntry.getValue();
           MemoryConsumer c = cList.remove(cList.size() - 1);
+          spilledConsumers.add(c);
           if (cList.isEmpty()) {
             sortedConsumers.remove(currentEntry.getKey());
           }
@@ -191,6 +212,19 @@ public class TaskMemoryManager {
             logger.error("error while calling spill() on " + c, e);
             throw new OutOfMemoryError("error while calling spill() on " + c + " : "
               + e.getMessage());
+          }
+        }
+
+        // readd those spilled memory consumers into sortedConsumers
+        for (MemoryConsumer c: spilledConsumers) {
+          if (c != consumer && c.getUsed() > 0) {
+            long key = c.getUsed();
+            List<MemoryConsumer> list = sortedConsumers.get(key);
+            if (list == null) {
+              list = new ArrayList<>(1);
+              sortedConsumers.put(key, list);
+            }
+            list.add(c);
           }
         }
       }
@@ -211,6 +245,14 @@ public class TaskMemoryManager {
         }
       }
 
+      if (sortedConsumers != null) {
+        List<MemoryConsumer> list = sortedConsumers.get(got);
+        if (list == null) {
+          list = new ArrayList<>(1);
+          sortedConsumers.put(got, list);
+        }
+        list.add(consumer);
+      }
       consumers.add(consumer);
       logger.debug("Task {} acquired {} for {}", taskAttemptId, Utils.bytesToString(got), consumer);
       return got;
@@ -411,6 +453,25 @@ public class TaskMemoryManager {
           logger.debug("unreleased " + Utils.bytesToString(c.getUsed()) + " memory from " + c);
         }
       }
+
+      if (onHeapConsumers != null) {
+        List<MemoryConsumer> list;
+        for (Map.Entry<Long, List<MemoryConsumer>> entry : onHeapConsumers.entrySet()) {
+          list = entry.getValue();
+          list.clear();
+        }
+        onHeapConsumers.clear();
+      }
+
+      if (offHeapConsumers != null) {
+        List<MemoryConsumer> list;
+        for (Map.Entry<Long, List<MemoryConsumer>> entry : offHeapConsumers.entrySet()) {
+          list = entry.getValue();
+          list.clear();
+        }
+        onHeapConsumers.clear();
+      }
+
       consumers.clear();
 
       for (MemoryBlock page : pageTable) {
