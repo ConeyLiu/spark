@@ -29,16 +29,39 @@ import org.json4s._
 import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
 
-import org.apache.spark.SparkContext
+import org.apache.spark.{Partition, SparkContext, TaskContext}
 import org.apache.spark.annotation.Since
 import org.apache.spark.api.java.{JavaPairRDD, JavaRDD}
 import org.apache.spark.internal.Logging
 import org.apache.spark.mllib.linalg._
 import org.apache.spark.mllib.rdd.MLPairRDDFunctions._
 import org.apache.spark.mllib.util.{Loader, Saveable}
-import org.apache.spark.rdd.RDD
+import org.apache.spark.rdd.{CartesianPartition, CartesianRDD, RDD}
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.storage.StorageLevel
+import org.apache.spark.util.CompletionIterator
+import org.apache.spark.util.collection.ExternalSorter
+
+private[recommendation] class KVCartesianRDD[K, V](
+    rdd1: RDD[(K, V)],
+    rdd2: RDD[(K, V)])
+  extends CartesianRDD(rdd1.sparkContext, rdd1, rdd2) {
+  type KVType = (K, V)
+
+  override def compute(split: Partition, context: TaskContext)
+  : Iterator[((K, V), (K, V))] = {
+    val sorter = new ExternalSorter[K, V, V](context)
+    val currSplit = split.asInstanceOf[CartesianPartition]
+
+    sorter.insertAll(rdd2.iterator(currSplit.s2, context))
+
+    val resultIter =
+      for (x <- rdd1.iterator(currSplit.s1, context);
+           y <- sorter.iterator.asInstanceOf[Iterator[KVType]]) yield (x, y)
+    CompletionIterator[(KVType, KVType), Iterator[(KVType, KVType)]](
+      resultIter, sorter.stop())
+  }
+}
 
 /**
  * Model representing the result of matrix factorization.
@@ -276,7 +299,7 @@ object MatrixFactorizationModel extends Loader[MatrixFactorizationModel] {
       num: Int): RDD[(Int, Array[(Int, Double)])] = {
     val srcBlocks = blockify(rank, srcFeatures)
     val dstBlocks = blockify(rank, dstFeatures)
-    val ratings = srcBlocks.cartesian(dstBlocks).flatMap {
+    val ratings = new KVCartesianRDD(srcBlocks, dstBlocks).flatMap {
       case ((srcIds, srcFactors), (dstIds, dstFactors)) =>
         val m = srcIds.length
         val n = dstIds.length
