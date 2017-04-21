@@ -227,6 +227,15 @@ private[spark] class DiskBlockObjectWriter(
     file
   }
 
+  def write(record: Any): Unit = {
+    if (!streamOpen) {
+      open()
+    }
+
+    objOut.writeObject(record)
+    recordWritten()
+  }
+
   /**
    * Writes a key-value pair.
    */

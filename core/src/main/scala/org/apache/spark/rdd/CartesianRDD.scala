@@ -22,7 +22,8 @@ import java.io.{IOException, ObjectOutputStream}
 import scala.reflect.ClassTag
 
 import org.apache.spark._
-import org.apache.spark.util.Utils
+import org.apache.spark.util.{CompletionIterator, Utils}
+import org.apache.spark.util.collection.ExternalVector
 
 private[spark]
 class CartesianPartition(
@@ -72,8 +73,13 @@ class CartesianRDD[T: ClassTag, U: ClassTag](
 
   override def compute(split: Partition, context: TaskContext): Iterator[(T, U)] = {
     val currSplit = split.asInstanceOf[CartesianPartition]
-    for (x <- rdd1.iterator(currSplit.s1, context);
-         y <- rdd2.iterator(currSplit.s2, context)) yield (x, y)
+    val iterator = rdd2.iterator(currSplit.s2, context)
+    val vector = new ExternalVector[U](context, SparkEnv.get.serializer)
+    vector.insertAll(iterator)
+    val resultIterator =
+      for (x <- rdd1.iterator(currSplit.s1, context);
+           y <- vector.iterator()) yield (x, y)
+    CompletionIterator[(T, U), Iterator[(T, U)]](resultIterator, vector.close())
   }
 
   override def getDependencies: Seq[Dependency[_]] = List(
