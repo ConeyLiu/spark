@@ -683,14 +683,14 @@ private[spark] class BlockManager(
   }
 
   /**
-    * Get a block from the block manager (either local or remote).
-    *
-    * This acquires a read lock on the block if the block was stored locally and does not acquire
-    * any locks if the block was fetched from a remote block manager. The read lock will
-    * automatically be freed once the result's `data` iterator is fully consumed.
-    */
+   * Get a block from the block manager (either local or remote).
+   *
+   * This acquires a read lock on the block if the block was stored locally and does not acquire
+   * any locks if the block was fetched from a remote block manager. The read lock will
+   * automatically be freed once the result's `data` iterator is fully consumed.
+   */
   def get[T: ClassTag](blockId: BlockId): Option[BlockResult] = {
-    getOrCacheRemote(blockId, false, Some(StorageLevel.NONE))
+    getOrCacheRemote(blockId, false, None)
   }
 
   /**

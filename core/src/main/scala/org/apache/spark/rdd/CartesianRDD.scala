@@ -121,9 +121,15 @@ class CartesianRDD[T: ClassTag, U: ClassTag](
     (iterator, readCachedBlock)
   }
 
+  /**
+   * Remove the block if it is not cached in local before. And also this block may be used by other
+   * task, so remove it with unblocking manner.
+   */
   private def removeBlock(blockId: BlockId,
                   readCachedBlock: Boolean): Unit = {
     val blockManager = SparkEnv.get.blockManager
+    // if the block is not read from local or it is already marked as removable, we should remove
+    // try to remove it.
     if (!readCachedBlock || blockManager.isRemovable(blockId)) {
       blockManager.removeOrMarkAsRemovable(blockId, true)
     }
