@@ -479,6 +479,70 @@ object Vectors {
     }
   }
 
+  def norm(values: Array[Double], p: Double): Double = {
+    require(p >= 1.0, "To compute the p-norm of the vector, we require that you specify a p>=1. " +
+      s"You specified p=$p.")
+    val size = values.length
+
+    if (p == 1) {
+      var sum = 0.0
+      var i = 0
+      while (i < size) {
+        sum += math.abs(values(i))
+        i += 1
+      }
+      sum
+    } else if (p == 2) {
+      var sum = 0.0
+      var i = 0
+      while (i < size) {
+        sum += values(i) * values(i)
+        i += 1
+      }
+      math.sqrt(sum)
+    } else if (p == Double.PositiveInfinity) {
+      var max = 0.0
+      var i = 0
+      while (i < size) {
+        val value = math.abs(values(i))
+        if (value > max) max = value
+        i += 1
+      }
+      max
+    } else {
+      var sum = 0.0
+      var i = 0
+      while (i < size) {
+        sum += math.pow(math.abs(values(i)), p)
+        i += 1
+      }
+      math.pow(sum, 1.0 / p)
+    }
+  }
+
+  /**
+   * Returns the squared distance between two Vectors.
+   * @param v1 first Vector.
+   * @param v2 second Vector.
+   * @return squared distance between two Vectors.
+   */
+  @Since("1.3.0")
+  def sqdist(v1: Array[Double], v2: Array[Double]): Double = {
+    require(v1.size == v2.size, s"Vector dimensions do not match: Dim(v1)=${v1.size} and Dim(v2)" +
+      s"=${v2.size}.")
+    var squaredDistance = 0.0
+
+    var kv = 0
+    val sz = v1.length
+    while (kv < sz) {
+      val score = v1(kv) - v2(kv)
+      squaredDistance += score * score
+      kv += 1
+    }
+    squaredDistance
+  }
+
+
   /**
    * Returns the squared distance between two Vectors.
    * @param v1 first Vector.

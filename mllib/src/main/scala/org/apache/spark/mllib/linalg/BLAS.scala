@@ -69,6 +69,14 @@ private[spark] object BLAS extends Serializable with Logging {
   }
 
   /**
+    * y += a * x
+    */
+  def axpy(a: Double, x: Array[Double], y: Array[Double]): Unit = {
+    val n = x.size
+    f2jBLAS.daxpy(n, a, x, 1, y, 1)
+  }
+
+  /**
    * y += a * x
    */
   private def axpy(a: Double, x: SparseVector, y: DenseVector): Unit = {
@@ -118,6 +126,14 @@ private[spark] object BLAS extends Serializable with Logging {
       case _ =>
         throw new IllegalArgumentException(s"dot doesn't support (${x.getClass}, ${y.getClass}).")
     }
+  }
+
+  def dot(x: Array[Double], y: Array[Double]): Double = {
+    require(x.size == y.size,
+      "BLAS.dot(x: Vector, y:Vector) was given Vectors with non-matching sizes:" +
+      " x.size = " + x.size + ", y.size = " + y.size)
+    val n = x.size
+    f2jBLAS.ddot(n, x, 1, y, 1)
   }
 
   /**
@@ -226,6 +242,13 @@ private[spark] object BLAS extends Serializable with Logging {
       case _ =>
         throw new IllegalArgumentException(s"scal doesn't support vector type ${x.getClass}.")
     }
+  }
+
+  /**
+    * x = a * x
+    */
+  def scal(a: Double, x: Array[Double]): Unit = {
+    f2jBLAS.dscal(x.length, a, x, 1)
   }
 
   // For level-3 routines, we use the native BLAS.
