@@ -17,8 +17,14 @@
 
 package org.apache.spark.ml.classification
 
+import java.nio.ByteBuffer
+import java.util.{HashMap => JHashMap}
+
+import scala.collection.JavaConverters._
+
 import org.apache.hadoop.fs.Path
 
+import org.apache.spark.SparkEnv
 import org.apache.spark.annotation.Since
 import org.apache.spark.ml.PredictorParams
 import org.apache.spark.ml.linalg._
@@ -26,6 +32,7 @@ import org.apache.spark.ml.param.{DoubleParam, Param, ParamMap, ParamValidators}
 import org.apache.spark.ml.param.shared.HasWeightCol
 import org.apache.spark.ml.util._
 import org.apache.spark.mllib.util.MLUtils
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Dataset, Row}
 import org.apache.spark.sql.functions.{col, lit}
 
@@ -154,12 +161,13 @@ class NaiveBayes @Since("1.5.0") (
     instr.logNumFeatures(numFeatures)
     val w = if (!isDefined(weightCol) || $(weightCol).isEmpty) lit(1.0) else col($(weightCol))
 
+    val mapedRdd = dataset.select(col($(labelCol)), w, col($(featuresCol))).rdd
+      .map { row => (row.getDouble(0), (row.getDouble(1), row.getAs[Vector](2)))}
+
+    val zeroValue = (0.0, Vectors.zeros(numFeatures).toDense)
     // Aggregates term frequencies per label.
-    // TODO: Calling aggregateByKey and collect creates two stages, we can implement something
-    // TODO: similar to reduceByKeyLocally to save one stage.
-    val aggregated = dataset.select(col($(labelCol)), w, col($(featuresCol))).rdd
-      .map { row => (row.getDouble(0), (row.getDouble(1), row.getAs[Vector](2)))
-      }.aggregateByKey[(Double, DenseVector)]((0.0, Vectors.zeros(numFeatures).toDense))(
+    // TODO: Add a parameter to determine whether we need aggregate locally.
+    val aggregated = aggregateData(mapedRdd, false, zeroValue,
       seqOp = {
          case ((weightSum: Double, featureSum: DenseVector), (weight, features)) =>
            requireValues(features)
@@ -170,7 +178,7 @@ class NaiveBayes @Since("1.5.0") (
          case ((weightSum1, featureSum1), (weightSum2, featureSum2)) =>
            BLAS.axpy(1.0, featureSum2, featureSum1)
            (weightSum1 + weightSum2, featureSum1)
-      }).collect().sortBy(_._1)
+      })
 
     val numLabels = aggregated.length
     instr.logNumClasses(numLabels)
@@ -206,6 +214,59 @@ class NaiveBayes @Since("1.5.0") (
     val model = new NaiveBayesModel(uid, pi, theta).setOldLabels(labelArray)
     instr.logSuccess(model)
     model
+  }
+
+  type vType = (Double, Vector)
+  type uType = (Double, DenseVector)
+
+  /**
+   * This method provides two ways to aggregate data. The first one is the normally
+   * "aggregateByKey". The second one is different from the ordinary "aggregateByKey"
+   * method, it directly returns a map to the driver, rather than a rdd. This will
+   * also perform the merging locally on each mapper before sending results to a
+   * reducer, similarly to a "combiner" in MapReduce.
+   *
+   * @param aggregateLocally whether aggregate Locally.
+   */
+  private def aggregateData(
+      rdd: RDD[(Double, vType)],
+      aggregateLocally: Boolean,
+      zeroValue: uType,
+      seqOp: (uType, vType) => uType,
+      combOp: (uType, uType) => uType): Array[(Double, uType)] = {
+    if (!aggregateLocally) {
+      rdd.aggregateByKey[uType](zeroValue)(seqOp, combOp).collect().sortBy(_._1)
+    } else {
+      // Serialize the zero value to a byte arrya so that we can get a new clone of it on each key
+      val zeroBuffer = SparkEnv.get.serializer.newInstance().serialize(zeroValue)
+      val zeroArray = new Array[Byte](zeroBuffer.limit())
+      zeroBuffer.get(zeroArray)
+
+      lazy val cachedSerializer = SparkEnv.get.serializer.newInstance()
+      val createZero = () => cachedSerializer.deserialize[uType](ByteBuffer.wrap(zeroArray))
+
+      val reducePartition = (iter: Iterator[(Double, vType)]) => {
+        val map = new JHashMap[Double, uType]()
+        iter.foreach { pair =>
+          val old = map.get(pair._1)
+          map.put(pair._1,
+            if (old == null) seqOp(createZero(), pair._2) else seqOp(old, pair._2))
+        }
+
+        Iterator(map)
+      }: Iterator[JHashMap[Double, uType]]
+
+      val mergeMaps = (m1: JHashMap[Double, uType], m2: JHashMap[Double, uType]) => {
+        m2.asScala.foreach { pair =>
+          val old = m1.get(pair._1)
+          m1.put(pair._1, if (old == null) pair._2 else combOp(old, pair._2))
+        }
+
+        m1
+      }: JHashMap[Double, uType]
+
+      rdd.mapPartitions(reducePartition).reduce(mergeMaps).asScala.toArray.sortBy(_._1)
+    }
   }
 
   @Since("1.5.0")
