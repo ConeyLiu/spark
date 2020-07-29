@@ -234,9 +234,9 @@ private[spark] class SparkSubmit extends Logging {
       case m if m.startsWith("mesos") => MESOS
       case m if m.startsWith("k8s") => KUBERNETES
       case m if m.startsWith("local") => LOCAL
-      case _ =>
-        error("Master must either be yarn or start with spark, mesos, k8s, or local")
-        -1
+      case _ => OTHERS
+//        error("Master must either be yarn or start with spark, mesos, k8s, or local")
+//        -1
     }
 
     // Set the deploy mode; default is client mode
@@ -605,7 +605,7 @@ private[spark] class SparkSubmit extends Logging {
       OptionAssigner(args.files, LOCAL | STANDALONE | MESOS | KUBERNETES, ALL_DEPLOY_MODES,
         confKey = FILES.key),
       OptionAssigner(args.jars, LOCAL, CLIENT, confKey = JARS.key),
-      OptionAssigner(args.jars, STANDALONE | MESOS | KUBERNETES, ALL_DEPLOY_MODES,
+      OptionAssigner(args.jars, STANDALONE | MESOS | KUBERNETES | OTHERS, ALL_DEPLOY_MODES,
         confKey = JARS.key),
       OptionAssigner(args.driverMemory, STANDALONE | MESOS | YARN | KUBERNETES, CLUSTER,
         confKey = DRIVER_MEMORY.key),
@@ -958,7 +958,8 @@ object SparkSubmit extends CommandLineUtils with Logging {
   private val MESOS = 4
   private val LOCAL = 8
   private val KUBERNETES = 16
-  private val ALL_CLUSTER_MGRS = YARN | STANDALONE | MESOS | LOCAL | KUBERNETES
+  private val OTHERS = 32
+  private val ALL_CLUSTER_MGRS = YARN | STANDALONE | MESOS | LOCAL | KUBERNETES | OTHERS
 
   // Deploy modes
   private val CLIENT = 1
