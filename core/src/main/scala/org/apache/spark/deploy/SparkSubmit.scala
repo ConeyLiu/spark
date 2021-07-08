@@ -997,16 +997,16 @@ object SparkSubmit extends CommandLineUtils with Logging {
   private val ALL_CLUSTER_MGRS = YARN | STANDALONE | MESOS | LOCAL | KUBERNETES
 
   // Deploy modes
-  private val CLIENT = 1
-  private val CLUSTER = 2
-  private val ALL_DEPLOY_MODES = CLIENT | CLUSTER
+  private[deploy] val CLIENT = 1
+  private[deploy] val CLUSTER = 2
+  private[deploy] val ALL_DEPLOY_MODES = CLIENT | CLUSTER
 
   // Special primary resource names that represent shells rather than application jars.
-  private val SPARK_SHELL = "spark-shell"
-  private val PYSPARK_SHELL = "pyspark-shell"
-  private val SPARKR_SHELL = "sparkr-shell"
-  private val SPARKR_PACKAGE_ARCHIVE = "sparkr.zip"
-  private val R_PACKAGE_ARCHIVE = "rpkg.zip"
+  private[deploy] val SPARK_SHELL = "spark-shell"
+  private[deploy] val PYSPARK_SHELL = "pyspark-shell"
+  private[deploy] val SPARKR_SHELL = "sparkr-shell"
+  private[deploy] val SPARKR_PACKAGE_ARCHIVE = "sparkr.zip"
+  private[deploy] val R_PACKAGE_ARCHIVE = "rpkg.zip"
 
   private val CLASS_NOT_FOUND_EXIT_STATUS = 101
 
@@ -1076,7 +1076,7 @@ object SparkSubmit extends CommandLineUtils with Logging {
   /**
    * Return whether the given main class represents a thrift server.
    */
-  private def isThriftServer(mainClass: String): Boolean = {
+  private[deploy] def isThriftServer(mainClass: String): Boolean = {
     mainClass == "org.apache.spark.sql.hive.thriftserver.HiveThriftServer2"
   }
 
@@ -1508,11 +1508,3 @@ private case class OptionAssigner(
     confKey: String = null,
     mergeFn: Option[(String, String) => String] = None)
 
-private[spark] trait SparkSubmitOperation {
-
-  def kill(submissionId: String, conf: SparkConf): Unit
-
-  def printSubmissionStatus(submissionId: String, conf: SparkConf): Unit
-
-  def supports(master: String): Boolean
-}
